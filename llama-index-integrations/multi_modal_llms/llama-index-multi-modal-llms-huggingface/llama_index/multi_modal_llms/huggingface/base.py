@@ -1,4 +1,4 @@
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Sequence, Union
 from typing_extensions import override
 from llama_index.core.base.llms.types import (
     ChatMessage,
@@ -8,8 +8,14 @@ from llama_index.core.base.llms.types import (
     CompletionResponseAsyncGen,
 )
 from llama_index.core.bridge.pydantic import Field, PrivateAttr
-from llama_index.core.constants import DEFAULT_CONTEXT_WINDOW, DEFAULT_NUM_OUTPUTS
-from llama_index.core.multi_modal_llms import MultiModalLLM, MultiModalLLMMetadata
+from llama_index.core.constants import (
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_NUM_OUTPUTS,
+)
+from llama_index.core.multi_modal_llms import (
+    MultiModalLLM,
+    MultiModalLLMMetadata,
+)
 from llama_index.core.schema import ImageDocument, ImageNode
 import torch
 from PIL import Image
@@ -48,6 +54,10 @@ class HuggingFaceMultiModal(MultiModalLLM):
     device: str = Field(
         default="cuda" if torch.cuda.is_available() else "cpu",
         description="The device to run the model on.",
+    )
+    device_map: Union[Dict[str, Any], str] = Field(
+        default="auto",
+        description="Tell HF accelerate where to put each layer of the model. In auto mode, HF accelerate determines this on it's own",
     )
     torch_dtype: Any = Field(
         default=torch.float16 if torch.cuda.is_available() else torch.float32,
@@ -101,7 +111,7 @@ class HuggingFaceMultiModal(MultiModalLLM):
             # Load the model based on the architecture
             self._model = AutoModelClass.from_pretrained(
                 self.model_name,
-                device_map=self.device,
+                device_map=self.device_map,
                 torch_dtype=self.torch_dtype,
                 trust_remote_code=self.trust_remote_code,
                 **self.additional_kwargs,
@@ -111,7 +121,9 @@ class HuggingFaceMultiModal(MultiModalLLM):
                 self.model_name, trust_remote_code=self.trust_remote_code
             )
         except Exception as e:
-            raise ValueError(f"Failed to initialize the model and processor: {e!s}")
+            raise ValueError(
+                f"Failed to initialize the model and processor: {e!s}"
+            )
 
     @classmethod
     def class_name(cls) -> str:
@@ -129,7 +141,9 @@ class HuggingFaceMultiModal(MultiModalLLM):
 
     # each unique model will override it
     def _prepare_messages(
-        self, messages: Sequence[ChatMessage], image_documents: Sequence[ImageDocument]
+        self,
+        messages: Sequence[ChatMessage],
+        image_documents: Sequence[ImageDocument],
     ) -> Dict[str, Any]:
         """
         Abstract method: Prepares input messages and image documents for the model.
@@ -147,7 +161,10 @@ class HuggingFaceMultiModal(MultiModalLLM):
 
     # some models will override it, some won't
     def complete(
-        self, prompt: str, image_documents: Sequence[ImageDocument], **kwargs: Any
+        self,
+        prompt: str,
+        image_documents: Sequence[ImageDocument],
+        **kwargs: Any,
     ) -> CompletionResponse:
         """
         Completes a task based on a text prompt and optional images.
@@ -220,7 +237,9 @@ class HuggingFaceMultiModal(MultiModalLLM):
 
     # we check the model architecture here
     @classmethod
-    def from_model_name(cls, model_name: str, **kwargs: Any) -> "HuggingFaceMultiModal":
+    def from_model_name(
+        cls, model_name: str, **kwargs: Any
+    ) -> "HuggingFaceMultiModal":
         """Checks the model architecture and initializes the model."""
         config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         # we check the architecture because users would want to use their own finetuned versions of VLMs
@@ -250,7 +269,9 @@ class Qwen2VisionMultiModal(HuggingFaceMultiModal):
     """
 
     def _prepare_messages(
-        self, messages: Sequence[ChatMessage], image_documents: Sequence[ImageDocument]
+        self,
+        messages: Sequence[ChatMessage],
+        image_documents: Sequence[ImageDocument],
     ) -> Dict[str, Any]:
         """
         Prepares the input messages and images for Qwen2 models. Images are appended in a custom format.
@@ -276,7 +297,10 @@ class Qwen2VisionMultiModal(HuggingFaceMultiModal):
 
         # Prepare the model inputs (text + images) and convert to tensor
         inputs = self._processor(
-            text=[text_prompt], images=image_inputs, padding=True, return_tensors="pt"
+            text=[text_prompt],
+            images=image_inputs,
+            padding=True,
+            return_tensors="pt",
         )
         return inputs.to(self.device)
 
@@ -289,10 +313,14 @@ class Qwen2VisionMultiModal(HuggingFaceMultiModal):
         )
         generated_ids = [
             output_ids[len(input_ids) :]
-            for input_ids, output_ids in zip(prepared_inputs["input_ids"], output_ids)
+            for input_ids, output_ids in zip(
+                prepared_inputs["input_ids"], output_ids
+            )
         ]
         output_text = self._processor.batch_decode(
-            generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            generated_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
         )
         return output_text[0]
 
@@ -361,9 +389,9 @@ class Florence2MultiModal(HuggingFaceMultiModal):
             else "<DETAILED_CAPTION>"
         )
         images = Image.open(image_documents.image_path)
-        inputs = self._processor(text=prompt, images=images, return_tensors="pt").to(
-            self.device, self.torch_dtype
-        )
+        inputs = self._processor(
+            text=prompt, images=images, return_tensors="pt"
+        ).to(self.device, self.torch_dtype)
         return {
             "prompt": prompt,
             "inputs": inputs,
@@ -416,17 +444,23 @@ class Phi35VisionMultiModal(HuggingFaceMultiModal):
         """
         Prepares the input messages and images for Phi3.5 models. Images are appended in a custom format.
         """
-        images = [Image.open(img_doc.image_path) for img_doc in image_documents]
+        images = [
+            Image.open(img_doc.image_path) for img_doc in image_documents
+        ]
         placeholder = "".join(f"<|image_{i+1}|>\n" for i in range(len(images)))
 
         chat_messages = [{"role": message.role, "content": message.content}]
         if images:
-            chat_messages[-1]["content"] = placeholder + chat_messages[-1]["content"]
+            chat_messages[-1]["content"] = (
+                placeholder + chat_messages[-1]["content"]
+            )
 
         prompt = self._processor.tokenizer.apply_chat_template(
             chat_messages, tokenize=False, add_generation_prompt=True
         )
-        return self._processor(prompt, images, return_tensors="pt").to(self.device)
+        return self._processor(prompt, images, return_tensors="pt").to(
+            self.device
+        )
 
     def _generate(self, prepared_inputs: Dict[str, Any]) -> str:
         """
@@ -441,7 +475,9 @@ class Phi35VisionMultiModal(HuggingFaceMultiModal):
         )
         generate_ids = generate_ids[:, prepared_inputs["input_ids"].shape[1] :]
         return self._processor.batch_decode(
-            generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            generate_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
         )[0]
 
     async def stream_chat(
@@ -501,9 +537,9 @@ class PaliGemmaMultiModal(HuggingFaceMultiModal):
             )
             image_documents = image_documents[0]
         images = Image.open(image_documents.image_path)
-        inputs = self._processor(text=messages, images=images, return_tensors="pt").to(
-            self.device
-        )
+        inputs = self._processor(
+            text=messages, images=images, return_tensors="pt"
+        ).to(self.device)
         input_len = inputs["input_ids"].shape[-1]
         return {"inputs": inputs, "input_len": input_len}
 
@@ -513,7 +549,9 @@ class PaliGemmaMultiModal(HuggingFaceMultiModal):
         """
         input_len = prepared_inputs["input_len"]
         inputs = prepared_inputs["inputs"]
-        generation = self._model.generate(**inputs, max_new_tokens=100, do_sample=False)
+        generation = self._model.generate(
+            **inputs, max_new_tokens=100, do_sample=False
+        )
         generation = generation[0][input_len:]
         return self._processor.decode(generation, skip_special_tokens=True)
 
@@ -532,7 +570,9 @@ class LlamaMultiModal(HuggingFaceMultiModal):
     """
 
     def _prepare_messages(
-        self, messages: Sequence[ChatMessage], image_documents: Sequence[ImageDocument]
+        self,
+        messages: Sequence[ChatMessage],
+        image_documents: Sequence[ImageDocument],
     ) -> Dict[str, Any]:
         """
         Prepares the input messages and images for Llama3.2 models. Images are appended in a custom format.
@@ -553,7 +593,7 @@ class LlamaMultiModal(HuggingFaceMultiModal):
 
         # Apply a chat template to format the message with the processor
         input_text = self._processor.tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True
+            messages, add_generation_prompt=True, tokenize=False
         )
 
         # Prepare the model inputs (text + images) and convert to tensor
@@ -569,9 +609,13 @@ class LlamaMultiModal(HuggingFaceMultiModal):
         )
         generated_ids = [
             output_ids[len(input_ids) :]
-            for input_ids, output_ids in zip(prepared_inputs["input_ids"], output_ids)
+            for input_ids, output_ids in zip(
+                prepared_inputs["input_ids"], output_ids
+            )
         ]
         output_text = self._processor.batch_decode(
-            generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            generated_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
         )
         return output_text[0]
